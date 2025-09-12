@@ -6,10 +6,10 @@ import "./App.css";
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 
-const REGION = import.meta.env.AWS_REGION;
-const ACCESS_KEY_ID = import.meta.env.AWS_ACCESS_KEY_ID;
-const SECRET_ACCESS_KEY = import.meta.env.AWS_SECRET_ACCESS_KEY;
-const BUCKET = import.meta.env.S3_BUCKET || "tcc-original-bucket";
+const REGION = import.meta.env.VITE_AWS_REGION;
+const ACCESS_KEY_ID = import.meta.env.VITE_AWS_ACCESS_KEY_ID;
+const SECRET_ACCESS_KEY = import.meta.env.VITE_AWS_SECRET_ACCESS_KEY;
+const BUCKET = import.meta.env.VITE_S3_BUCKET || "tcc-original-bucket";
 
 const s3 = new S3Client({
   region: REGION,
