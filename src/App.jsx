@@ -44,12 +44,12 @@ async function uploadFileToS3(file) {
   const uploader = new Upload({
     client: s3,
     params: {
-      Bucket: BUCKET, // Access Point ARN ou bucket name
+      Bucket: BUCKET,
       Key: key,
       Body: file,
       ContentType: file.type || "application/octet-stream",
-      ACL: "private",
     },
+
     queueSize: 3,
     partSize: 5 * 1024 * 1024,
   });
