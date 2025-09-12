@@ -1,24 +1,42 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import "./App.css";
 
-// === S3 (AWS SDK v3) — sem mudanças visuais ===
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 
-const REGION = import.meta.env.VITE_AWS_REGION;
+// ====== ENV (com defaults seguros p/ seu Access Point) ======
+const REGION = import.meta.env.VITE_AWS_REGION || "us-east-1";
 const ACCESS_KEY_ID = import.meta.env.VITE_AWS_ACCESS_KEY_ID;
 const SECRET_ACCESS_KEY = import.meta.env.VITE_AWS_SECRET_ACCESS_KEY;
-const BUCKET = import.meta.env.VITE_S3_BUCKET || "tcc-original-bucket";
+// Use o ARN do Access Point como default:
+const BUCKET =
+  import.meta.env.VITE_S3_BUCKET ||
+  "arn:aws:s3:us-east-1:503821891242:accesspoint/s3-origin-put";
 
 const s3 = new S3Client({
   region: REGION,
   credentials: {
     accessKeyId: ACCESS_KEY_ID,
     secretAccessKey: SECRET_ACCESS_KEY,
-    sessionToken: undefined,
+    ...(import.meta.env.VITE_AWS_SESSION_TOKEN
+      ? { sessionToken: import.meta.env.VITE_AWS_SESSION_TOKEN }
+      : {}),
   },
 });
+
+// ---- logging para Vercel (serverless) ----
+async function logToVercel(level, data) {
+  try {
+    await fetch("/api/log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level, ...data }),
+    });
+  } catch {
+    // não quebra a UI se log falhar
+  }
+}
 
 async function uploadFileToS3(file) {
   const key = `uploads/${Date.now()}_${file.name}`;
@@ -26,7 +44,7 @@ async function uploadFileToS3(file) {
   const uploader = new Upload({
     client: s3,
     params: {
-      Bucket: BUCKET,
+      Bucket: BUCKET, // Access Point ARN ou bucket name
       Key: key,
       Body: file,
       ContentType: file.type || "application/octet-stream",
@@ -36,17 +54,37 @@ async function uploadFileToS3(file) {
     partSize: 5 * 1024 * 1024,
   });
 
-  // Sem barra de progresso na UI para não mexer em estilo; mas dá para logar no console.
+  // Debug opcional sem mexer no visual:
   // uploader.on("httpUploadProgress", (e) => console.log(file.name, e));
 
   await uploader.done();
+  return { key };
 }
 
 function App() {
   const [images, setImages] = useState([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [status, setStatus] = useState(null); // "success" | "error" | null
 
-  // Mantém sua lógica de preview
-  const onDrop = useCallback(async (acceptedFiles) => {
+  // Validação leve de envs (apenas loga para ajudar no debug)
+  useEffect(() => {
+    if (!ACCESS_KEY_ID || !SECRET_ACCESS_KEY) {
+      logToVercel("warn", {
+        message: "missing-aws-creds",
+        extra: {
+          region: REGION,
+          hasAccessKey: !!ACCESS_KEY_ID,
+          hasSecret: !!SECRET_ACCESS_KEY,
+          bucketValueSample: BUCKET?.slice(0, 20) + "...",
+        },
+      });
+    }
+    if (!BUCKET) {
+      logToVercel("warn", { message: "missing-bucket" });
+    }
+  }, []);
+
+  const onDrop = useCallback((acceptedFiles) => {
     setImages((prev) =>
       prev.concat(
         acceptedFiles.map((file) =>
@@ -54,14 +92,20 @@ function App() {
         )
       )
     );
+    setStatus(null);
 
-    try {
-      await Promise.all(acceptedFiles.map(uploadFileToS3));
-      alert("Envio realizado com sucesso ✅");
-    } catch (err) {
-      console.error(err);
-      alert("Falha no envio ao S3. Verifique CORS/credenciais.");
-    }
+    // log: arquivos adicionados
+    logToVercel("info", {
+      message: "files-added",
+      extra: {
+        count: acceptedFiles.length,
+        files: acceptedFiles.map((f) => ({
+          name: f.name,
+          type: f.type,
+          size: f.size,
+        })),
+      },
+    });
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -69,7 +113,58 @@ function App() {
     accept: { "image/*": [] },
   });
 
-  // ===== A PARTIR DAQUI É SUA UI ORIGINAL (sem alterações de estilo) =====
+  async function handleUploadClick() {
+    if (!images.length || isUploading) return;
+    setIsUploading(true);
+    setStatus(null);
+
+    // log: início upload
+    logToVercel("info", {
+      message: "upload-start",
+      extra: {
+        bucket: BUCKET,
+        region: REGION,
+        fileCount: images.length,
+        files: images.map((f) => ({ name: f.name, size: f.size, type: f.type })),
+      },
+    });
+
+    try {
+      const results = await Promise.all(images.map(uploadFileToS3));
+
+      // log: sucesso
+      logToVercel("info", {
+        message: "upload-success",
+        extra: { results },
+      });
+
+      setStatus("success");
+      // Se quiser limpar depois do sucesso, descomente:
+      // setImages([]);
+    } catch (err) {
+      // log: erro detalhado
+      logToVercel("error", {
+        message: "upload-failed",
+        error: {
+          name: err?.name,
+          message: err?.message,
+          stack: err?.stack?.split("\n").slice(0, 5).join("\n"),
+          toString: String(err),
+        },
+        extra: {
+          bucket: BUCKET,
+          region: REGION,
+          fileCount: images.length,
+        },
+      });
+
+      setStatus("error");
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  // ===== UI ORIGINAL (sem alterações de estilo) =====
   return (
     <div className="app">
       <header className="app-header">
@@ -83,7 +178,7 @@ function App() {
         <button
           className="btn btn-ghost"
           onClick={() =>
-            alert("O front envia automaticamente para o S3 ao soltar/selecionar os arquivos.")
+            alert("Selecione 1 ou mais imagens e clique em Enviar para subir ao S3.")
           }
         >
           Ajuda
@@ -110,7 +205,7 @@ function App() {
               </div>
               <div className="drop-text">
                 <strong>
-                  {isDragActive ? "Solte para enviar" : "Solte o arquivo"}
+                  {isDragActive ? "Solte para adicionar" : "Solte o arquivo"}
                 </strong>{" "}
                 ou <span className="link">clique para escolher</span>
               </div>
@@ -128,6 +223,27 @@ function App() {
                   <div className="name">{file.name}</div>
                 </div>
               ))}
+            </div>
+
+            {/* Botão centralizado + mensagens de status (sem novo CSS) */}
+            <div style={{ marginTop: 16, textAlign: "center" }}>
+              <button
+                className="btn"
+                onClick={handleUploadClick}
+                disabled={!images.length || isUploading}
+              >
+                {isUploading ? "Enviando..." : "Enviar"}
+              </button>
+              {status === "success" && (
+                <p style={{ color: "green", marginTop: 8 }}>
+                  ✅ Upload realizado com sucesso!
+                </p>
+              )}
+              {status === "error" && (
+                <p style={{ color: "red", marginTop: 8 }}>
+                  ❌ Erro no upload. Tente novamente mais tarde.
+                </p>
+              )}
             </div>
           </section>
 
