@@ -5,15 +5,15 @@ import "./App.css";
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 
-// ====== ENV (com defaults seguros p/ seu Access Point) ======
+// ====== ENV ======
 const REGION = import.meta.env.VITE_AWS_REGION || "us-east-1";
 const ACCESS_KEY_ID = import.meta.env.VITE_AWS_ACCESS_KEY_ID;
 const SECRET_ACCESS_KEY = import.meta.env.VITE_AWS_SECRET_ACCESS_KEY;
-// Use o ARN do Access Point como default:
 const BUCKET =
   import.meta.env.VITE_S3_BUCKET ||
   "arn:aws:s3:us-east-1:503821891242:accesspoint/s3-origin-put";
 
+// Cliente do SDK v3 (usado no caminho primário)
 const s3 = new S3Client({
   region: REGION,
   credentials: {
@@ -33,32 +33,76 @@ async function logToVercel(level, data) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ level, ...data }),
     });
-  } catch {
-    // não quebra a UI se log falhar
-  }
+  } catch {/* silencioso */}
 }
 
-async function uploadFileToS3(file) {
+/** Upload primário: SDK v3 direto no S3 */
+async function uploadDirectSDK(file) {
   const key = `uploads/${Date.now()}_${file.name}`;
-
   const uploader = new Upload({
     client: s3,
     params: {
-      Bucket: BUCKET,
+      Bucket: BUCKET, // pode ser bucket name OU Access Point ARN
       Key: key,
       Body: file,
       ContentType: file.type || "application/octet-stream",
+      // ACL removido (reduz preflight/CORS); padrão já é "private"
     },
-
     queueSize: 3,
     partSize: 5 * 1024 * 1024,
   });
 
-  // Debug opcional sem mexer no visual:
   // uploader.on("httpUploadProgress", (e) => console.log(file.name, e));
-
   await uploader.done();
-  return { key };
+  return { key, via: "sdk" };
+}
+
+/** Upload fallback: URL pré-assinada via /api/s3-presign */
+async function uploadViaPresigned(file) {
+  // 1) pede URL pré-assinada
+  const presignRes = await fetch("/api/s3-presign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, contentType: file.type }),
+  });
+  if (!presignRes.ok) {
+    const txt = await presignRes.text().catch(() => "");
+    throw new Error(`presign failed (${presignRes.status}) ${txt}`);
+  }
+  const { url, key } = await presignRes.json();
+
+  // 2) PUT direto p/ S3 (sem SDK) — mantém UI intacta
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url, true);
+    xhr.setRequestHeader(
+      "Content-Type",
+      file.type || "application/octet-stream"
+    );
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) return resolve();
+      reject(new Error(`PUT failed: ${xhr.status} ${xhr.responseText || ""}`));
+    };
+    xhr.onerror = () => reject(new Error("network error on PUT"));
+    xhr.send(file);
+  });
+
+  return { key, via: "presigned" };
+}
+
+/** Tenta SDK → se falhar, cai para presigned */
+async function uploadWithFallback(file) {
+  try {
+    const r = await uploadDirectSDK(file);
+    return r;
+  } catch (err) {
+    await logToVercel("warn", {
+      message: "sdk-upload-failed-fallback",
+      error: { message: err?.message, name: err?.name },
+    });
+    const r2 = await uploadViaPresigned(file);
+    return r2;
+  }
 }
 
 function App() {
@@ -66,22 +110,9 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState(null); // "success" | "error" | null
 
-  // Validação leve de envs (apenas loga para ajudar no debug)
+  // Log de ajuda (não quebra UI)
   useEffect(() => {
-    if (!ACCESS_KEY_ID || !SECRET_ACCESS_KEY) {
-      logToVercel("warn", {
-        message: "missing-aws-creds",
-        extra: {
-          region: REGION,
-          hasAccessKey: !!ACCESS_KEY_ID,
-          hasSecret: !!SECRET_ACCESS_KEY,
-          bucketValueSample: BUCKET?.slice(0, 20) + "...",
-        },
-      });
-    }
-    if (!BUCKET) {
-      logToVercel("warn", { message: "missing-bucket" });
-    }
+    if (!BUCKET) logToVercel("warn", { message: "missing-bucket" });
   }, []);
 
   const onDrop = useCallback((acceptedFiles) => {
@@ -94,7 +125,6 @@ function App() {
     );
     setStatus(null);
 
-    // log: arquivos adicionados
     logToVercel("info", {
       message: "files-added",
       extra: {
@@ -118,7 +148,6 @@ function App() {
     setIsUploading(true);
     setStatus(null);
 
-    // log: início upload
     logToVercel("info", {
       message: "upload-start",
       extra: {
@@ -130,19 +159,17 @@ function App() {
     });
 
     try {
-      const results = await Promise.all(images.map(uploadFileToS3));
+      const results = await Promise.all(images.map(uploadWithFallback));
 
-      // log: sucesso
       logToVercel("info", {
         message: "upload-success",
-        extra: { results },
+        extra: { results }, // cada item tem {key, via: "sdk"|"presigned"}
       });
 
       setStatus("success");
-      // Se quiser limpar depois do sucesso, descomente:
+      // Opcional: limpar após sucesso
       // setImages([]);
     } catch (err) {
-      // log: erro detalhado
       logToVercel("error", {
         message: "upload-failed",
         error: {
@@ -151,13 +178,8 @@ function App() {
           stack: err?.stack?.split("\n").slice(0, 5).join("\n"),
           toString: String(err),
         },
-        extra: {
-          bucket: BUCKET,
-          region: REGION,
-          fileCount: images.length,
-        },
+        extra: { bucket: BUCKET, region: REGION, fileCount: images.length },
       });
-
       setStatus("error");
     } finally {
       setIsUploading(false);
@@ -241,7 +263,7 @@ function App() {
               )}
               {status === "error" && (
                 <p style={{ color: "red", marginTop: 8 }}>
-                  ❌ Erro no upload. Tente novamente mais tarde.
+                  ❌ Erro no upload. Veja os logs na Vercel e tente novamente.
                 </p>
               )}
             </div>
