@@ -36,42 +36,58 @@ async function logToVercel(level, data) {
   } catch {/* silencioso */}
 }
 
+// ===== Helpers p/ nome do arquivo =====
+function sanitizeEmail(email) {
+  return (email || "noemail").trim().replace(/\s+/g, "").replace(/[\\/]/g, "-");
+}
+function getExt(file) {
+  const n = file?.name || "";
+  const i = n.lastIndexOf(".");
+  if (i > -1 && i < n.length - 1) return n.slice(i + 1).toLowerCase();
+  const t = (file?.type || "").toLowerCase();
+  if (t.includes("jpeg")) return "jpg";
+  if (t.includes("png")) return "png";
+  if (t.includes("webp")) return "webp";
+  if (t.includes("gif")) return "gif";
+  return "bin";
+}
+function makeObjectKey(file, email) {
+  const safe = sanitizeEmail(email);
+  const ext = getExt(file);
+  const ts = Date.now();
+  return `uploads/${safe}-${ts}.${ext}`;
+}
+
 /** Upload primário: SDK v3 direto no S3 */
-async function uploadDirectSDK(file) {
-  const key = `uploads/${Date.now()}_${file.name}`;
+async function uploadDirectSDK(file, key) {
   const uploader = new Upload({
     client: s3,
     params: {
-      Bucket: BUCKET, // pode ser bucket name OU Access Point ARN
+      Bucket: BUCKET,
       Key: key,
       Body: file,
       ContentType: file.type || "application/octet-stream",
-      // ACL removido (reduz preflight/CORS); padrão já é "private"
     },
     queueSize: 3,
     partSize: 5 * 1024 * 1024,
   });
-
-  // uploader.on("httpUploadProgress", (e) => console.log(file.name, e));
   await uploader.done();
   return { key, via: "sdk" };
 }
 
 /** Upload fallback: URL pré-assinada via /api/s3-presign */
-async function uploadViaPresigned(file) {
-  // 1) pede URL pré-assinada
+async function uploadViaPresigned(file, key) {
   const presignRes = await fetch("/api/s3-presign", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filename: file.name, contentType: file.type }),
+    body: JSON.stringify({ key, contentType: file.type }),
   });
   if (!presignRes.ok) {
     const txt = await presignRes.text().catch(() => "");
     throw new Error(`presign failed (${presignRes.status}) ${txt}`);
   }
-  const { url, key } = await presignRes.json();
+  const { url } = await presignRes.json();
 
-  // 2) PUT direto p/ S3 (sem SDK) — mantém UI intacta
   await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", url, true);
@@ -91,26 +107,27 @@ async function uploadViaPresigned(file) {
 }
 
 /** Tenta SDK → se falhar, cai para presigned */
-async function uploadWithFallback(file) {
+async function uploadWithFallback(file, key) {
   try {
-    const r = await uploadDirectSDK(file);
+    const r = await uploadDirectSDK(file, key);
     return r;
   } catch (err) {
     await logToVercel("warn", {
       message: "sdk-upload-failed-fallback",
       error: { message: err?.message, name: err?.name },
+      extra: { key },
     });
-    const r2 = await uploadViaPresigned(file);
+    const r2 = await uploadViaPresigned(file, key);
     return r2;
   }
 }
 
 function App() {
   const [images, setImages] = useState([]);
+  const [email, setEmail] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState(null); // "success" | "error" | null
 
-  // Log de ajuda (não quebra UI)
   useEffect(() => {
     if (!BUCKET) logToVercel("warn", { message: "missing-bucket" });
   }, []);
@@ -138,13 +155,26 @@ function App() {
     });
   }, []);
 
+  function removeImage(index) {
+    setImages((prev) => {
+      const img = prev[index];
+      try { URL.revokeObjectURL(img?.preview); } catch {}
+      return prev.filter((_, i) => i !== index);
+    });
+  }
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { "image/*": [] },
   });
 
+  // Envia EM ORDEM e PARA no primeiro sucesso
   async function handleUploadClick() {
     if (!images.length || isUploading) return;
+    if (!email.trim()) {
+      alert("Informe um e-mail antes de enviar.");
+      return;
+    }
     setIsUploading(true);
     setStatus(null);
 
@@ -154,23 +184,45 @@ function App() {
         bucket: BUCKET,
         region: REGION,
         fileCount: images.length,
+        email,
         files: images.map((f) => ({ name: f.name, size: f.size, type: f.type })),
       },
     });
 
     try {
-      const results = await Promise.all(images.map(uploadWithFallback));
+      let successResult = null;
 
-      logToVercel("info", {
-        message: "upload-success",
-        extra: { results }, // cada item tem {key, via: "sdk"|"presigned"}
-      });
+      for (let i = 0; i < images.length; i++) {
+        const file = images[i];
+        const key = makeObjectKey(file, email); // {email}-{timestamp}.{ext}
+        try {
+          const r = await uploadWithFallback(file, key);
+          successResult = { index: i, ...r };
+          await logToVercel("info", {
+            message: "upload-one-success",
+            extra: { index: i, name: file.name, via: r.via, key: r.key },
+          });
+          break;
+        } catch (err) {
+          await logToVercel("warn", {
+            message: "upload-one-failed",
+            error: { name: err?.name, message: err?.message },
+            extra: { index: i, name: file.name, key },
+          });
+        }
+      }
 
-      setStatus("success");
-      // Opcional: limpar após sucesso
-      // setImages([]);
+      if (successResult) {
+        setStatus("success");
+        await logToVercel("info", {
+          message: "upload-success",
+          extra: { firstSuccess: successResult },
+        });
+      } else {
+        throw new Error("all-uploads-failed");
+      }
     } catch (err) {
-      logToVercel("error", {
+      await logToVercel("error", {
         message: "upload-failed",
         error: {
           name: err?.name,
@@ -178,7 +230,7 @@ function App() {
           stack: err?.stack?.split("\n").slice(0, 5).join("\n"),
           toString: String(err),
         },
-        extra: { bucket: BUCKET, region: REGION, fileCount: images.length },
+        extra: { bucket: BUCKET, region: REGION, fileCount: images.length, email },
       });
       setStatus("error");
     } finally {
@@ -186,7 +238,7 @@ function App() {
     }
   }
 
-  // ===== UI ORIGINAL (sem alterações de estilo) =====
+  // ===== UI =====
   return (
     <div className="app">
       <header className="app-header">
@@ -200,7 +252,7 @@ function App() {
         <button
           className="btn btn-ghost"
           onClick={() =>
-            alert("Selecione 1 ou mais imagens e clique em Enviar para subir ao S3.")
+            alert("Selecione 1 ou mais imagens, informe seu e-mail e clique em Enviar.")
           }
         >
           Ajuda
@@ -236,23 +288,69 @@ function App() {
 
             <div className="thumbs">
               {images.map((file, i) => (
-                <div key={i} className="thumb">
+                <div key={i} className="thumb" style={{ position: "relative" }}>
                   <img
                     src={file.preview}
                     alt={file.name}
                     onLoad={() => URL.revokeObjectURL(file.preview)}
                   />
                   <div className="name">{file.name}</div>
+                  <button
+                    onClick={() => removeImage(i)}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      right: 0,
+                      background: "rgba(0,0,0,0.6)",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "50%",
+                      width: 24,
+                      height: 24,
+                      cursor: "pointer",
+                      lineHeight: "24px",
+                    }}
+                    aria-label="Remover imagem"
+                    title="Remover"
+                  >
+                    ×
+                  </button>
                 </div>
               ))}
             </div>
 
-            {/* Botão centralizado + mensagens de status (sem novo CSS) */}
+            {/* === E-mail com o mesmo padrão de títulos/legendas === */}
+            <div style={{ marginTop: 12 }}>
+              <h2 id="email-title">E-mail</h2>
+              <p className="subtle">Será usado para identificar o arquivo enviado.</p>
+              <input
+                id="email"
+                type="email"
+                aria-labelledby="email-title"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="seuemail@exemplo.com"
+                className="input"
+                style={{
+                  // fallback caso .input não exista no seu App.css
+                  width: "100%",
+                  padding: "10px 12px",
+                  border: "1px solid #ddd",
+                  borderRadius: 6,
+                  fontSize: "1rem",
+                  fontFamily: "inherit",
+                  color: "#333",
+                }}
+              />
+            </div>
+
+            {/* Botão centralizado + mensagens de status */}
             <div style={{ marginTop: 16, textAlign: "center" }}>
               <button
                 className="btn"
                 onClick={handleUploadClick}
-                disabled={!images.length || isUploading}
+                disabled={!images.length || isUploading || !email.trim()}
+                title={!email.trim() ? "Informe um e-mail" : undefined}
               >
                 {isUploading ? "Enviando..." : "Enviar"}
               </button>
