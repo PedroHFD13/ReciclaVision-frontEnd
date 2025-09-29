@@ -365,6 +365,14 @@ function App() {
                 </p>
               )}
             </div>
+
+            {/* Texto informativo ADICIONADO FORA da div do upload/email, com mais espaçamento */}
+            <div style={{ marginTop: 32 }}>
+              <p className="subtle">
+                Após recebermos sua imagem, o resultado da análise será enviado por e-mail,
+                indicando a probabilidade de ser vidro ou plástico.
+              </p>
+            </div>
           </section>
 
           <aside className="card">
