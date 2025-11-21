@@ -2,117 +2,6 @@ import { useCallback, useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import "./App.css";
 
-import { S3Client } from "@aws-sdk/client-s3";
-import { Upload } from "@aws-sdk/lib-storage";
-
-// ====== ENV ======
-const REGION = import.meta.env.VITE_AWS_REGION || "us-east-1";
-const ACCESS_KEY_ID = import.meta.env.VITE_AWS_ACCESS_KEY_ID;
-const SECRET_ACCESS_KEY = import.meta.env.VITE_AWS_SECRET_ACCESS_KEY;
-const BUCKET =
-  import.meta.env.VITE_S3_BUCKET ||
-  "arn:aws:s3:us-east-1:503821891242:accesspoint/s3-origin-put";
-
-// Cliente do SDK v3
-const s3 = new S3Client({
-  region: REGION,
-  credentials: {
-    accessKeyId: ACCESS_KEY_ID,
-    secretAccessKey: SECRET_ACCESS_KEY,
-    ...(import.meta.env.VITE_AWS_SESSION_TOKEN
-      ? { sessionToken: import.meta.env.VITE_AWS_SESSION_TOKEN }
-      : {}),
-  },
-});
-
-// ---- logging para Vercel ----
-async function logToVercel(level, data) {
-  try {
-    await fetch("/api/log", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ level, ...data }),
-    });
-  } catch {}
-}
-
-// ===== Helpers =====
-function getExt(file) {
-  const n = file?.name || "";
-  const i = n.lastIndexOf(".");
-  if (i > -1 && i < n.length - 1) return n.slice(i + 1).toLowerCase();
-  const t = (file?.type || "").toLowerCase();
-  if (t.includes("jpeg")) return "jpg";
-  if (t.includes("png")) return "png";
-  if (t.includes("webp")) return "webp";
-  if (t.includes("gif")) return "gif";
-  return "bin";
-}
-
-function makeObjectKey(file) {
-  const ext = getExt(file);
-  return `uploads/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-}
-
-async function uploadDirectSDK(file, key) {
-  const uploader = new Upload({
-    client: s3,
-    params: {
-      Bucket: BUCKET,
-      Key: key,
-      Body: file,
-      ContentType: file.type || "application/octet-stream",
-    },
-    queueSize: 3,
-    partSize: 5 * 1024 * 1024,
-  });
-  await uploader.done();
-  return { key, via: "sdk" };
-}
-
-async function uploadViaPresigned(file, key) {
-  const presignRes = await fetch("/api/s3-presign", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, contentType: file.type }),
-  });
-  if (!presignRes.ok) {
-    const txt = await presignRes.text().catch(() => "");
-    throw new Error(`presign failed (${presignRes.status}) ${txt}`);
-  }
-  const { url } = await presignRes.json();
-
-  await new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url, true);
-    xhr.setRequestHeader(
-      "Content-Type",
-      file.type || "application/octet-stream"
-    );
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) return resolve();
-      reject(new Error(`PUT failed: ${xhr.status} ${xhr.responseText || ""}`));
-    };
-    xhr.onerror = () => reject(new Error("network error on PUT"));
-    xhr.send(file);
-  });
-
-  return { key, via: "presigned" };
-}
-
-async function uploadWithFallback(file, key) {
-  try {
-    return await uploadDirectSDK(file, key);
-  } catch (err) {
-    await logToVercel("warn", {
-      message: "sdk-upload-failed-fallback",
-      error: { message: err?.message, name: err?.name },
-      extra: { key },
-    });
-    return await uploadViaPresigned(file, key);
-  }
-}
-
 function App() {
   const [images, setImages] = useState([]);
   const [email, setEmail] = useState("");
@@ -141,6 +30,7 @@ function App() {
   }, []);
 
   const onDrop = useCallback((acceptedFiles) => {
+    console.log("📁 ARQUIVOS RECEBIDOS:", acceptedFiles);
     setImages((prev) =>
       prev.concat(
         acceptedFiles.map((file) =>
@@ -166,53 +56,102 @@ function App() {
     accept: { "image/*": [] },
   });
 
+  // ===============================================================
+  //  ENVIO DE IMAGEM — COM LOGS ULTRA DETALHADOS
+  // ===============================================================
+  async function uploadSingleImage(file) {
+    console.log("=====================================================");
+    console.log("📤 Iniciando envio da imagem:", file.name);
+    console.log("📦 Tamanho:", file.size, "bytes");
+    console.log("📄 Tipo:", file.type);
+    console.log("=====================================================");
+
+    const formData = new FormData();
+    formData.append("imagem", file);
+
+    const query =
+      `?` +
+      (webhook ? `webhook=${encodeURIComponent(webhook)}&` : "") +
+      (email ? `email=${encodeURIComponent(email)}&` : "") +
+      (location ? `lat=${location.lat}&lng=${location.lng}&` : "") +
+      (locationName ? `locationName=${encodeURIComponent(locationName)}&` : "");
+
+    const finalURL = `http://54.156.234.253/reconhece-imagem/v1${query}`;
+
+    console.log("🌐 URL final para envio:", finalURL);
+
+    try {
+      console.log("📨 Enviando requisição POST...");
+      const res = await fetch(finalURL, {
+        method: "POST",
+        body: formData,
+      });
+
+      console.log("📥 Resposta recebida do servidor:");
+      console.log("➡ Status:", res.status, res.statusText);
+
+      const responseText = await res.text();
+      console.log("📄 Corpo da resposta:", responseText);
+
+      if (!res.ok) {
+        console.error("❌ Backend retornou erro:", responseText);
+        throw new Error(`Falha ao enviar imagem: ${file.name}`);
+      }
+
+      console.log("✅ Imagem enviada com sucesso:", file.name);
+      return true;
+    } catch (err) {
+      console.error("🔥 ERRO NO ENVIO (FRONT-END):", err);
+      throw err;
+    }
+  }
+
+  // ===============================================================
+  //    ENVIO DE TODAS AS IMAGENS (1 REQ POR IMAGEM)
+  // ===============================================================
   async function handleUploadClick() {
-    if (!images.length || isUploading) return;
-    if (!email.trim()) {
-      alert("Informe um e-mail antes de enviar.");
+    console.log("=====================================================");
+    console.log("🚀 INICIANDO ENVIO DE TODAS AS IMAGENS");
+    console.log("📸 Total de imagens:", images.length);
+    console.log("📧 Email:", email);
+    console.log("🔗 Webhook:", webhook);
+    console.log("=====================================================");
+
+    if (images.length === 0) {
+      alert("Envie ao menos uma imagem.");
+      console.log("❌ BLOQUEADO — nenhuma imagem selecionada");
       return;
     }
+
+    if (!email.trim() && !webhook.trim()) {
+      console.log("❌ BLOQUEADO — nenhum email ou webhook informado");
+      alert("Informe E-MAIL ou WEBHOOK (pelo menos um).");
+      return;
+    }
+
+    console.log("✔ Validação OK — iniciando uploads...");
 
     setIsUploading(true);
     setStatus(null);
 
     try {
-      let successResult = null;
-
-      for (let i = 0; i < images.length; i++) {
-        const file = images[i];
-        const key = makeObjectKey(file);
-
-        try {
-          const r = await uploadWithFallback(file, key);
-          successResult = { index: i, ...r };
-          break;
-        } catch {}
+      for (const file of images) {
+        console.log("---------------------------------------------");
+        console.log("📤 Enviando imagem:", file.name);
+        await uploadSingleImage(file);
       }
 
-      if (!successResult) throw new Error("all-uploads-failed");
-
-      const apiUrl =
-        `/reconhece-imagem/v1?email=${encodeURIComponent(email)}` +
-        (webhook ? `&webhook=${encodeURIComponent(webhook)}` : "") +
-        (location ? `&lat=${location.lat}&lng=${location.lng}` : "") +
-        (locationName ? `&locationName=${encodeURIComponent(locationName)}` : "");
-
-      await fetch(apiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ s3Key: successResult.key }),
-      });
-
+      console.log("🎉 TODAS AS IMAGENS FORAM ENVIADAS COM SUCESSO!");
       setStatus("success");
-    } catch {
+    } catch (err) {
+      console.log("💥 ERRO DURANTE O ENVIO:", err);
       setStatus("error");
     } finally {
+      console.log("🏁 FINALIZADO");
       setIsUploading(false);
     }
   }
 
-  // === UI ===
   return (
     <div className="app">
       <header className="app-header">
@@ -227,7 +166,7 @@ function App() {
         <button
           className="btn btn-ghost"
           onClick={() =>
-            alert("Selecione umas imagens, informe e-mail e clique Enviar.")
+            alert("Selecione umas imagens e clique Enviar.")
           }
         >
           Ajuda
@@ -235,12 +174,9 @@ function App() {
       </header>
 
       <main className="container">
-        {/* Agora usa APENAS seu grid oficial do CSS */}
         <div className="grid">
 
-          {/* === COLUNA ESQUERDA === */}
           <section className="card">
-
             <h2>Upload</h2>
             <p className="subtle">Arraste arquivos ou clique para selecionar.</p>
 
@@ -291,8 +227,10 @@ function App() {
             </div>
 
             <h2>E-mail</h2>
-            <p className="subtle">Será usado para identificar o arquivo enviado.</p>
-
+            <p className="subtle">
+              Será usado para identificar o arquivo enviado.  
+              <br />(*Opcional se webhook estiver preenchido*)
+            </p>
             <input
               className="input"
               type="email"
@@ -302,8 +240,9 @@ function App() {
             />
 
             <h2>Webhook (opcional)</h2>
-            <p className="subtle">Receberá o resultado via POST.</p>
-
+            <p className="subtle">
+              Caso informe um webhook, o e-mail vira opcional.
+            </p>
             <input
               className="input"
               type="text"
@@ -316,25 +255,28 @@ function App() {
               <button
                 className="btn"
                 onClick={handleUploadClick}
-                disabled={!email.trim() || images.length === 0}
+                disabled={images.length === 0}
               >
                 {isUploading ? "Enviando..." : "Enviar"}
               </button>
 
               {status === "success" && (
-                <p style={{ color: "green", marginTop: 6 }}>Upload realizado!</p>
+                <p style={{ color: "green", marginTop: 6 }}>
+                  Todas as imagens foram enviadas!
+                </p>
               )}
               {status === "error" && (
-                <p style={{ color: "red", marginTop: 6 }}>Erro ao enviar.</p>
+                <p style={{ color: "red", marginTop: 6 }}>
+                  Erro ao enviar algumas imagens.
+                </p>
               )}
             </div>
 
             <p className="subtle" style={{ marginTop: 20 }}>
-              Após recebermos sua imagem, enviaremos o resultado por e-mail.
+              Após receber sua imagem, enviaremos o resultado.
             </p>
           </section>
 
-          {/* === COLUNA DIREITA (ASIDE) === */}
           <aside className="card">
             <h2>Dicas de descarte</h2>
             <ul className="list">
@@ -344,6 +286,7 @@ function App() {
               <li>Comprima garrafas plásticas para economizar espaço.</li>
             </ul>
           </aside>
+
         </div>
       </main>
 
