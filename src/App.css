@@ -1,6 +1,7 @@
 /* ======= Design tokens ======= */
 :root{
   --bg: #0b1020;
+  --bg-main: #0d1424; /* NOVO FUNDO ACINZENTADO */
   --panel: #121a33;
   --panel-2: #0f1730;
   --text: #e9eefb;
@@ -14,18 +15,26 @@
 
 *{box-sizing:border-box}
 html,body,#root{height:100%}
+
 body{
   margin:0;
   font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-  background: radial-gradient(1200px 600px at 10% -10%, rgba(117,228,247,.12), transparent),
-              radial-gradient(1000px 500px at 90% 10%, rgba(91,156,255,.15), transparent),
-              var(--bg);
+
+  /* ======== ALTERAÇÃO IMPORTANTE ======== */
+  background: var(--bg-main) !important;
+  background-color: var(--bg-main) !important;
+
   color: var(--text);
   line-height:1.5;
 }
 
 /* App layout */
-.app{min-height:100%; display:flex; flex-direction:column}
+.app{
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+}
+
 .app-header{
   display:flex; align-items:center; justify-content:space-between;
   padding: 18px 22px; position: sticky; top:0; z-index:5;
@@ -33,17 +42,45 @@ body{
   backdrop-filter: blur(10px);
   border-bottom: 1px solid rgba(255,255,255,0.06);
 }
+
 .brand{display:flex; gap:12px; align-items:center}
-.brand .logo{width:36px; height:36px; display:grid; place-items:center; border-radius:12px; background:linear-gradient(135deg,var(--brand),var(--brand-2)); box-shadow: var(--shadow);}
+.brand .logo{
+  width:36px; height:36px; display:grid; place-items:center;
+  border-radius:12px;
+  background:linear-gradient(135deg,var(--brand),var(--brand-2));
+  box-shadow: var(--shadow);
+}
 .brand h1{margin:0; font-size:18px}
 .brand p{margin:0; font-size:12px; color:var(--muted)}
 
-.container{padding:28px 22px; max-width:1100px; width:100%; margin:0 auto; flex:1}
-.grid{display:grid; grid-template-columns: 2fr 1fr; gap:20px}
+.container{
+  padding:40px 22px 60px 22px;
+  max-width:1100px;
+  width:100%;
+  margin:0 auto;
+  flex:1;
+}
+
+/* GRID */
+.grid{
+  display:grid;
+  grid-template-columns: 2fr 1fr;
+  gap:20px;
+  align-items:start;
+  padding-bottom:40px;
+}
 @media (max-width: 900px){.grid{grid-template-columns:1fr}}
 
-.card{background: linear-gradient(180deg, var(--panel), var(--panel-2)); border:1px solid rgba(255,255,255,0.06); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px;}
-.card h2{margin:0 0 6px}
+.card{
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  border:1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 28px;
+  margin-bottom:32px;
+}
+
+.card h2{margin:22px 0 6px}
 .card p.subtle{margin:0 0 8px; color:var(--muted)}
 
 /* Dropzone */
@@ -55,30 +92,93 @@ body{
   background: var(--glass);
   outline:none; cursor:pointer;
 }
-.dropzone:focus,.dropzone:hover{border-color: var(--brand); transform: translateY(-1px); background: rgba(118,228,247,0.05);}
+
+.dropzone:focus,.dropzone:hover{
+  border-color: var(--brand);
+  transform: translateY(-1px);
+  background: rgba(118,228,247,0.05);
+}
+
 .drop-illustration{position:relative; width:76px; height:76px; margin-bottom:10px}
-.drop-illustration .circle{position:absolute; inset:0; border-radius:999px; background:linear-gradient(135deg, rgba(91,156,255,.3), rgba(118,228,247,.25));}
-.drop-illustration .arrow{position:absolute; inset:0; display:grid; place-items:center; font-size:36px; font-weight:700; color:#d9e7ff}
+.drop-illustration .circle{
+  position:absolute; inset:0; border-radius:999px;
+  background:linear-gradient(135deg, rgba(91,156,255,.3), rgba(118,228,247,.25));
+}
+.drop-illustration .arrow{
+  position:absolute; inset:0; display:grid; place-items:center;
+  font-size:36px; font-weight:700; color:#d9e7ff
+}
+
 .drop-text{font-size:14px}
 .drop-text .link{color: var(--brand); text-decoration: underline}
 .drop-hint{font-size:12px; color: var(--muted); margin-top:6px}
 
-/* Thumbs grid */
-.thumbs{display:grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap:12px; margin-top:16px}
+/* THUMBS */
+.thumbs{
+  display:grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap:12px;
+  margin-top:16px
+}
 .thumb{
   border:1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.04);
   border-radius:12px; padding:10px; display:flex; flex-direction:column; align-items:center;
 }
-.thumb img{width:120px; height:120px; object-fit:cover; border-radius:8px; border:1px solid rgba(255,255,255,0.1)}
-.thumb .name{font-size:12px; color:var(--muted); margin-top:6px; text-align:center; word-break: break-word}
-
-/* Info card */
-.list{padding-left:18px; margin:8px 0 0 0}
-.list li{margin:6px 0; color:var(--muted)}
+.thumb img{
+  width:120px; height:120px; object-fit:cover; border-radius:8px;
+  border:1px solid rgba(255,255,255,0.1)
+}
+.thumb .name{
+  font-size:12px; color:var(--muted); margin-top:6px; text-align:center; word-break: break-word
+}
 
 /* Buttons */
-.btn{border:none; border-radius:12px; padding:10px 14px; font-weight:600; cursor:pointer;
-     background:rgba(255,255,255,0.08); color:var(--text); transition: transform .12s ease, background .12s ease, box-shadow .12s ease, opacity .12s ease;}
-.btn:hover{transform: translateY(-1px); background: rgba(255,255,255,0.12)}
-.btn-ghost{background: transparent; border:1px solid rgba(255,255,255,0.14)}
-.footer{padding:20px 22px; text-align:center; color:var(--muted); border-top: 1px solid rgba(255,255,255,0.06); margin-top:24px}
+.btn{
+  border:none; border-radius:12px; padding:10px 14px; font-weight:600; cursor:pointer;
+  background:rgba(255,255,255,0.08); color:var(--text);
+  transition: transform .12s, background .12s, box-shadow .12s, opacity .12s;
+}
+.btn:hover{
+  transform: translateY(-1px);
+  background: rgba(255,255,255,0.12)
+}
+.btn-ghost{
+  background: transparent;
+  border:1px solid rgba(255,255,255,0.14)
+}
+
+/* Inputs */
+.input {
+  width: 100%;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: 1rem;
+  outline: none;
+  font-family: inherit;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+  margin-bottom:14px;
+}
+
+.input::placeholder { color: rgba(255, 255, 255, 0.5); }
+
+.input:focus {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px rgba(91,156,255,0.25);
+}
+
+/* Footer */
+.footer{
+  padding:26px 22px;
+  text-align:center;
+  color:var(--muted);
+  border-top: 1px solid rgba(255,255,255,0.06);
+
+  /* COR DO FOOTER (MANTIDA) */
+  background: rgba(0,0,0,0.22);
+
+  margin-top:auto;
+}
