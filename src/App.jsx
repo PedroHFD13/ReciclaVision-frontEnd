@@ -11,6 +11,41 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState(null);
 
+  // ✅ Histórico local
+  const [results, setResults] = useState(() => {
+    try {
+      const stored = localStorage.getItem("reciclavision-results");
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  function saveResult(result) {
+    const updated = [...results, result];
+    setResults(updated);
+    localStorage.setItem("reciclavision-results", JSON.stringify(updated));
+  }
+
+  // ✅ Webhook interno FIXO
+  const internalWebhook = `https://recicla-vision-front-end.vercel.app/api/local-webhook`;
+
+  // ✅ Buscar resultados do webhook interno a cada 3s
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/api/local-webhook-pending");
+        const data = await res.json();
+
+        if (Array.isArray(data) && data.length > 0) {
+          data.forEach(item => saveResult(item));
+        }
+      } catch {}
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [results]);
+
   // localização
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -30,7 +65,6 @@ function App() {
   }, []);
 
   const onDrop = useCallback((acceptedFiles) => {
-    console.log("📁 ARQUIVOS RECEBIDOS:", acceptedFiles);
     setImages((prev) =>
       prev.concat(
         acceptedFiles.map((file) =>
@@ -44,9 +78,7 @@ function App() {
   function removeImage(index) {
     setImages((prev) => {
       const img = prev[index];
-      try {
-        URL.revokeObjectURL(img.preview);
-      } catch {}
+      try { URL.revokeObjectURL(img.preview); } catch {}
       return prev.filter((_, i) => i !== index);
     });
   }
@@ -56,65 +88,34 @@ function App() {
     accept: { "image/*": [] },
   });
 
-  // ===============================================================
-  //  ENVIO DE IMAGEM — TRATA CORS COMO SUCESSO
-  // ===============================================================
+  // ✅ ENVIO DUPLO
   async function uploadSingleImage(file) {
-    console.log("=====================================================");
-    console.log("📤 Iniciando envio da imagem:", file.name);
-    console.log("📦 Tamanho:", file.size, "bytes");
-    console.log("📄 Tipo:", file.type);
-    console.log("=====================================================");
-
     const formData = new FormData();
     formData.append("imagem", file);
 
-    const query =
-      `?webhook=${encodeURIComponent(webhook)}` +
+    const base = `http://54.156.234.253/reconhece-imagem/v1`;
+
+    const extra =
       (location ? `&lat=${location.lat}&lng=${location.lng}` : "") +
       (locationName ? `&locationName=${encodeURIComponent(locationName)}` : "");
 
-    const finalURL = `http://54.156.234.253/reconhece-imagem/v1${query}`;
+    // 1️⃣ Webhook do usuário
+    const userURL = `${base}?webhook=${encodeURIComponent(webhook)}${extra}`;
+    try { await fetch(userURL, { method: "POST", body: formData, mode: "no-cors" }); }
+    catch {}
 
-    console.log("🌐 URL final para envio:", finalURL);
+    // 2️⃣ Webhook interno
+    const internalURL = `${base}?webhook=${encodeURIComponent(internalWebhook)}${extra}`;
+    try { await fetch(internalURL, { method: "POST", body: formData, mode: "no-cors" }); }
+    catch {}
 
-    try {
-      console.log("📨 Enviando requisição POST (no-cors)...");
-      
-      await fetch(finalURL, {
-        method: "POST",
-        body: formData,
-        mode: "no-cors"
-      });
-
-      console.log("⚠️ Resposta bloqueada por CORS — tratado como SUCESSO");
-      return true;
-
-    } catch (err) {
-      console.log("🔥 ERRO DE REDE, MAS CONTINUANDO:", err);
-      return true;
-    }
+    return true;
   }
 
-  // ===============================================================
-  // ENVIO DE TODAS AS IMAGENS (1 REQ POR IMAGEM)
-  // ===============================================================
+  // ✅ Envio total
   async function handleUploadClick() {
-    console.log("=====================================================");
-    console.log("🚀 INICIANDO ENVIO DE TODAS AS IMAGENS");
-    console.log("📸 Total de imagens:", images.length);
-    console.log("🔗 Webhook:", webhook);
-    console.log("=====================================================");
-
-    if (images.length === 0) {
-      alert("Envie ao menos uma imagem.");
-      return;
-    }
-
-    if (!webhook.trim()) {
-      alert("Informe um WEBHOOK antes de enviar.");
-      return;
-    }
+    if (images.length === 0) return alert("Envie ao menos uma imagem.");
+    if (!webhook.trim()) return alert("Informe um WEBHOOK antes de enviar.");
 
     setIsUploading(true);
     setStatus(null);
@@ -124,11 +125,13 @@ function App() {
     }
 
     setStatus("success");
-
-    // ✅ LIMPAR LISTA DEPOIS DO ENVIO
     setImages([]);
-
     setIsUploading(false);
+  }
+
+  function clearResults() {
+    setResults([]);
+    localStorage.removeItem("reciclavision-results");
   }
 
   return (
@@ -142,17 +145,28 @@ function App() {
           </div>
         </div>
 
-        <button
-          className="btn btn-ghost"
-          onClick={() => alert("Selecione imagens, informe o webhook e clique Enviar.")}
-        >
+        <button className="btn btn-ghost" onClick={() => alert("Selecione imagens, informe o webhook e clique Enviar.")}>
           Ajuda
         </button>
       </header>
 
       <main className="container">
-        <div className="grid">
 
+        {/* ✅ GRID DE 3 COLUNAS */}
+        <div className="grid" >
+
+          {/* ✅ Dicas */}
+          <aside className="card">
+            <h2>Dicas de descarte</h2>
+            <ul className="list">
+              <li>Lave e seque embalagens antes de descartar.</li>
+              <li>Vidro e plástico devem ser separados.</li>
+              <li>Descarte vidro quebrado com cuidado.</li>
+              <li>Comprima garrafas plásticas para economizar espaço.</li>
+            </ul>
+          </aside>
+
+          {/* ✅ Upload */}
           <section className="card">
             <h2>Upload</h2>
             <p className="subtle">Arraste arquivos ou clique para selecionar.</p>
@@ -175,13 +189,8 @@ function App() {
             <div className="thumbs">
               {images.map((file, i) => (
                 <div key={i} className="thumb" style={{ position: "relative" }}>
-                  <img
-                    src={file.preview}
-                    alt={file.name}
-                    onLoad={() => URL.revokeObjectURL(file.preview)}
-                  />
+                  <img src={file.preview} alt={file.name} onLoad={() => URL.revokeObjectURL(file.preview)} />
                   <div className="name">{file.name}</div>
-
                   <button
                     onClick={() => removeImage(i)}
                     style={{
@@ -215,11 +224,7 @@ function App() {
             />
 
             <div style={{ textAlign: "center", marginTop: 16 }}>
-              <button
-                className="btn"
-                onClick={handleUploadClick}
-                disabled={images.length === 0}
-              >
+              <button className="btn" onClick={handleUploadClick} disabled={images.length === 0}>
                 {isUploading ? "Enviando..." : "Enviar"}
               </button>
 
@@ -230,23 +235,37 @@ function App() {
               )}
             </div>
 
-            {/* ✅ MENSAGEM INFORMATIVA NOVA */}
             <p className="subtle" style={{ marginTop: 18 }}>
-              ✅ O resultado da análise será enviado automaticamente para o webhook informado.
+              ✅ Os resultados serão enviados para o webhook informado
               <br />
-              🔗 Basta colar a URL do seu webhook, enviar as imagens e aguardar a resposta.
+              ✅ E também serão exibidos aqui no site
             </p>
-
           </section>
 
+          {/* ✅ Resultados */}
           <aside className="card">
-            <h2>Dicas de descarte</h2>
-            <ul className="list">
-              <li>Lave e seque embalagens antes de descartar.</li>
-              <li>Vidro e plástico devem ser separados.</li>
-              <li>Descarte vidro quebrado com cuidado.</li>
-              <li>Comprima garrafas plásticas para economizar espaço.</li>
-            </ul>
+            <h2>Resultados recebidos</h2>
+
+            {results.length === 0 ? (
+              <p className="subtle">Nenhum resultado recebido ainda.</p>
+            ) : (
+              <ul className="list" style={{ maxHeight: 300, overflowY: "auto" }}>
+                {results.map((r, i) => (
+                  <li key={i}>
+                    <strong>{new Date(r.timestamp).toLocaleString()}</strong>
+                    <pre style={{ fontSize: 12, marginTop: 4 }}>
+                      {JSON.stringify(r.data, null, 2)}
+                    </pre>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {results.length > 0 && (
+              <button className="btn" style={{ marginTop: 12 }} onClick={clearResults}>
+                Limpar histórico
+              </button>
+            )}
           </aside>
 
         </div>
