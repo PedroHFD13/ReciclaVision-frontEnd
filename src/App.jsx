@@ -1,10 +1,10 @@
+// App.jsx
 import { useCallback, useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import "./App.css";
 
 function App() {
   const [images, setImages] = useState([]);
-  const [email, setEmail] = useState("");
   const [webhook, setWebhook] = useState("");
   const [location, setLocation] = useState(null);
   const [locationName, setLocationName] = useState("");
@@ -57,7 +57,7 @@ function App() {
   });
 
   // ===============================================================
-  //  ENVIO DE IMAGEM — COM LOGS ULTRA DETALHADOS
+  //  ENVIO DE IMAGEM — AGORA SOMENTE WEBHOOK (OBRIGATÓRIO)
   // ===============================================================
   async function uploadSingleImage(file) {
     console.log("=====================================================");
@@ -70,11 +70,9 @@ function App() {
     formData.append("imagem", file);
 
     const query =
-      `?` +
-      (webhook ? `webhook=${encodeURIComponent(webhook)}&` : "") +
-      (email ? `email=${encodeURIComponent(email)}&` : "") +
-      (location ? `lat=${location.lat}&lng=${location.lng}&` : "") +
-      (locationName ? `locationName=${encodeURIComponent(locationName)}&` : "");
+      `?webhook=${encodeURIComponent(webhook)}` +
+      (location ? `&lat=${location.lat}&lng=${location.lng}` : "") +
+      (locationName ? `&locationName=${encodeURIComponent(locationName)}` : "");
 
     const finalURL = `http://54.156.234.253/reconhece-imagem/v1${query}`;
 
@@ -87,11 +85,9 @@ function App() {
         body: formData,
       });
 
-      console.log("📥 Resposta recebida do servidor:");
-      console.log("➡ Status:", res.status, res.statusText);
-
+      console.log("📥 Status:", res.status, res.statusText);
       const responseText = await res.text();
-      console.log("📄 Corpo da resposta:", responseText);
+      console.log("📄 Resposta:", responseText);
 
       if (!res.ok) {
         console.error("❌ Backend retornou erro:", responseText);
@@ -107,13 +103,12 @@ function App() {
   }
 
   // ===============================================================
-  //    ENVIO DE TODAS AS IMAGENS (1 REQ POR IMAGEM)
+  // ENVIO DE TODAS AS IMAGENS (1 REQ POR IMAGEM)
   // ===============================================================
   async function handleUploadClick() {
     console.log("=====================================================");
     console.log("🚀 INICIANDO ENVIO DE TODAS AS IMAGENS");
     console.log("📸 Total de imagens:", images.length);
-    console.log("📧 Email:", email);
     console.log("🔗 Webhook:", webhook);
     console.log("=====================================================");
 
@@ -123,9 +118,9 @@ function App() {
       return;
     }
 
-    if (!email.trim() && !webhook.trim()) {
-      console.log("❌ BLOQUEADO — nenhum email ou webhook informado");
-      alert("Informe E-MAIL ou WEBHOOK (pelo menos um).");
+    if (!webhook.trim()) {
+      console.log("❌ BLOQUEADO — webhook obrigatório não informado");
+      alert("Informe um WEBHOOK antes de enviar.");
       return;
     }
 
@@ -165,9 +160,7 @@ function App() {
 
         <button
           className="btn btn-ghost"
-          onClick={() =>
-            alert("Selecione umas imagens e clique Enviar.")
-          }
+          onClick={() => alert("Selecione imagens, informe o webhook e clique Enviar.")}
         >
           Ajuda
         </button>
@@ -226,23 +219,9 @@ function App() {
               ))}
             </div>
 
-            <h2>E-mail</h2>
-            <p className="subtle">
-              Será usado para identificar o arquivo enviado.  
-              <br />(*Opcional se webhook estiver preenchido*)
-            </p>
-            <input
-              className="input"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="seuemail@exemplo.com"
-            />
+            <h2>Webhook</h2>
+            <p className="subtle">Obrigatório — o resultado será enviado para este endereço.</p>
 
-            <h2>Webhook (opcional)</h2>
-            <p className="subtle">
-              Caso informe um webhook, o e-mail vira opcional.
-            </p>
             <input
               className="input"
               type="text"
@@ -272,9 +251,6 @@ function App() {
               )}
             </div>
 
-            <p className="subtle" style={{ marginTop: 20 }}>
-              Após receber sua imagem, enviaremos o resultado.
-            </p>
           </section>
 
           <aside className="card">
