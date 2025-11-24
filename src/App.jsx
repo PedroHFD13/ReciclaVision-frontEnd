@@ -6,8 +6,6 @@ import "./App.css";
 function App() {
   const [images, setImages] = useState([]);
   const [webhook, setWebhook] = useState("");
-  const [location, setLocation] = useState(null);
-  const [locationName, setLocationName] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState(null);
 
@@ -22,6 +20,7 @@ function App() {
   });
 
   function saveResult(result) {
+    console.log("✅ [LOG] Salvando resultado local:", result);
     const updated = [...results, result];
     setResults(updated);
     localStorage.setItem("reciclavision-results", JSON.stringify(updated));
@@ -33,38 +32,27 @@ function App() {
   // ✅ Buscar resultados do webhook interno a cada 3s
   useEffect(() => {
     const interval = setInterval(async () => {
+      console.log("🔄 [LOG] Checando resultados pendentes...");
       try {
         const res = await fetch("/api/local-webhook-pending");
         const data = await res.json();
 
+        console.log("📥 [LOG] Dados recebidos do webhook interno:", data);
+
         if (Array.isArray(data) && data.length > 0) {
           data.forEach(item => saveResult(item));
         }
-      } catch {}
+      } catch (err) {
+        console.error("❌ [LOG] Erro ao buscar resultados:", err);
+      }
     }, 3000);
 
     return () => clearInterval(interval);
   }, [results]);
 
-  // localização
-  useEffect(() => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      setLocation(coords);
-
-      try {
-        const url = `https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lng}&format=json`;
-        const resp = await fetch(url, {
-          headers: { "User-Agent": "ReciclaVision/1.0" },
-        });
-        const data = await resp.json();
-        setLocationName(data.display_name || `${coords.lat}, ${coords.lng}`);
-      } catch {}
-    });
-  }, []);
-
   const onDrop = useCallback((acceptedFiles) => {
+    console.log("📁 [LOG] Imagens adicionadas:", acceptedFiles);
+
     setImages((prev) =>
       prev.concat(
         acceptedFiles.map((file) =>
@@ -72,10 +60,12 @@ function App() {
         )
       )
     );
+
     setStatus(null);
   }, []);
 
   function removeImage(index) {
+    console.log(`🗑️ [LOG] Removendo imagem índice ${index}`);
     setImages((prev) => {
       const img = prev[index];
       try { URL.revokeObjectURL(img.preview); } catch {}
@@ -88,34 +78,57 @@ function App() {
     accept: { "image/*": [] },
   });
 
-  // ✅ ENVIO DUPLO
+  // ✅ ✅ ENVIO VIA PROXY
   async function uploadSingleImage(file) {
+    console.log("🚀 [LOG] Preparando envio da imagem:", {
+      name: file.name,
+      size: file.size,
+      type: file.type
+    });
+
     const formData = new FormData();
     formData.append("imagem", file);
 
-    const base = `http://54.156.234.253/reconhece-imagem/v1`;
+    console.log("📦 [LOG] FormData criado:", formData);
 
-    const extra =
-      (location ? `&lat=${location.lat}&lng=${location.lng}` : "") +
-      (locationName ? `&locationName=${encodeURIComponent(locationName)}` : "");
+    // ✅ Envio ao webhook do usuário via PROXY
+    const proxyUserURL = `/api/proxy?webhook=${encodeURIComponent(webhook)}`;
+    console.log("🌎 [LOG] Enviando via proxy (usuário):", proxyUserURL);
 
-    // 1️⃣ Webhook do usuário
-    const userURL = `${base}?webhook=${encodeURIComponent(webhook)}${extra}`;
-    try { await fetch(userURL, { method: "POST", body: formData, mode: "no-cors" }); }
-    catch {}
+    try {
+      await fetch(proxyUserURL, { method: "POST", body: formData });
+      console.log("✅ [LOG] Envio concluído via proxy (usuário)");
+    } catch (err) {
+      console.error("❌ [LOG] Erro no proxy (usuário):", err);
+    }
 
-    // 2️⃣ Webhook interno
-    const internalURL = `${base}?webhook=${encodeURIComponent(internalWebhook)}${extra}`;
-    try { await fetch(internalURL, { method: "POST", body: formData, mode: "no-cors" }); }
-    catch {}
+    // ✅ Envio ao webhook interno via PROXY
+    const proxyInternalURL = `/api/proxy?webhook=${encodeURIComponent(internalWebhook)}`;
+    console.log("🏠 [LOG] Enviando via proxy (interno):", proxyInternalURL);
+
+    try {
+      await fetch(proxyInternalURL, { method: "POST", body: formData });
+      console.log("✅ [LOG] Envio concluído via proxy (interno)");
+    } catch (err) {
+      console.error("❌ [LOG] Erro no proxy (interno):", err);
+    }
 
     return true;
   }
 
   // ✅ Envio total
   async function handleUploadClick() {
-    if (images.length === 0) return alert("Envie ao menos uma imagem.");
-    if (!webhook.trim()) return alert("Informe um WEBHOOK antes de enviar.");
+    console.log("🚀 [LOG] Iniciando envio...");
+
+    if (images.length === 0) {
+      console.warn("⚠️ [LOG] Nenhuma imagem selecionada");
+      return alert("Envie ao menos uma imagem.");
+    }
+
+    if (!webhook.trim()) {
+      console.warn("⚠️ [LOG] Nenhum webhook informado");
+      return alert("Informe um WEBHOOK antes de enviar.");
+    }
 
     setIsUploading(true);
     setStatus(null);
@@ -124,12 +137,14 @@ function App() {
       await uploadSingleImage(file);
     }
 
+    console.log("✅ [LOG] Todas as imagens foram enviadas!");
     setStatus("success");
     setImages([]);
     setIsUploading(false);
   }
 
   function clearResults() {
+    console.log("🧹 [LOG] Limpando histórico local...");
     setResults([]);
     localStorage.removeItem("reciclavision-results");
   }
@@ -153,7 +168,7 @@ function App() {
       <main className="container">
 
         {/* ✅ GRID DE 3 COLUNAS */}
-        <div className="grid" >
+        <div className="grid">
 
           {/* ✅ Dicas */}
           <aside className="card">
